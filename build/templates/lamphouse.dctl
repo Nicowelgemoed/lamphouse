@@ -1,0 +1,355 @@
+// Lamphouse: a display rendering transform for DaVinci Resolve whose looks are rendered by a
+// physical photochemical model (colour negative -> printer -> print -> projector).
+// @@URL@@
+//
+// Scene-referred camera log in, display out (SDR or HDR). Use via the ResolveFX DCTL plugin on the
+// last node: halation reads neighbouring pixels and grain uses the timeline frame index.
+//
+// Derived from spektrafilm by Andrea Volpato, https://github.com/andreavolpato/spektrafilm
+// Licensed CC BY-SA 4.0, https://creativecommons.org/licenses/by-sa/4.0/
+// Modified by @@AUTHOR@@: film profiles resampled and baked into this DCTL with an original
+// rendering model and display transform (see CHANGELOG.txt in the Lamphouse repository).
+// This file is licensed CC BY-SA 4.0. Not affiliated with or endorsed by Kodak or Andrea Volpato.
+// Build: @@BUILD@@
+
+DEFINE_UI_PARAMS(in_space, Input, DCTLUI_COMBO_BOX, 0, { IN_DWG, IN_ACESCCT, IN_LOGC3, IN_LOGC4, IN_SLOG3, IN_LOG3G10, IN_VLOG, IN_LINDWG }, { DaVinci WG Intermediate, ACEScct, ARRI LogC3 AWG3, ARRI LogC4 AWG4, Sony S-Log3 SGamut3.Cine, RED Log3G10 RWG, Panasonic V-Log V-Gamut, Linear DaVinci WG })
+DEFINE_UI_PARAMS(look, Look, DCTLUI_COMBO_BOX, 0, { LK_CLASSIC, LK_NIGHT, LK_FINE, LK_SOFT, LK_BOLD, LK_SILVER }, { Classic, Night, Fine, Soft, Bold, Silver })
+DEFINE_UI_PARAMS(response, Response, DCTLUI_COMBO_BOX, 0, { RS_LOOK, RS_FASTT, RS_DAY, RS_FINET, RS_FINED }, { Use Look, Fast Tungsten, Daylight, Fine Tungsten, Fine Daylight })
+DEFINE_UI_PARAMS(print_base, Print Base, DCTLUI_COMBO_BOX, 0, { PB_LOOK, PB_CLASSIC, PB_DEEP }, { Use Look, Classic, Deep })
+DEFINE_UI_PARAMS(process, Process, DCTLUI_COMBO_BOX, 0, { PR_LOOK, PR_NORMAL, PR_STRONG, PR_SILVER }, { Use Look, Normal, Strong, Silver })
+DEFINE_UI_PARAMS(exposure, Exposure, DCTLUI_SLIDER_FLOAT, 0.0, -4.0, 4.0, 0.05)
+DEFINE_UI_PARAMS(development, Development, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 2.0, 0.25)
+DEFINE_UI_PARAMS(separation, Colour Separation, DCTLUI_SLIDER_FLOAT, 0.3, 0.0, 3.0, 0.05)
+DEFINE_UI_PARAMS(brightness, Brightness, DCTLUI_SLIDER_FLOAT, 0.0, -12.0, 12.0, 0.5)
+DEFINE_UI_PARAMS(bal_r, Red Balance, DCTLUI_SLIDER_FLOAT, 0.0, -12.0, 12.0, 0.5)
+DEFINE_UI_PARAMS(bal_g, Green Balance, DCTLUI_SLIDER_FLOAT, 0.0, -12.0, 12.0, 0.5)
+DEFINE_UI_PARAMS(bal_b, Blue Balance, DCTLUI_SLIDER_FLOAT, 0.0, -12.0, 12.0, 0.5)
+DEFINE_UI_PARAMS(contrast, Contrast, DCTLUI_SLIDER_FLOAT, 1.0, 0.6, 1.6, 0.01)
+DEFINE_UI_PARAMS(silver, Silver Retention, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.01)
+DEFINE_UI_PARAMS(halation, Halation, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 4.0, 0.05)
+DEFINE_UI_PARAMS(halation_size, Halation Size, DCTLUI_SLIDER_FLOAT, 1.0, 0.3, 3.0, 0.05)
+DEFINE_UI_PARAMS(grain, Grain, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 3.0, 0.05)
+DEFINE_UI_PARAMS(grain_size, Grain Size, DCTLUI_SLIDER_FLOAT, 1.0, 0.5, 2.5, 0.05)
+DEFINE_UI_PARAMS(format, Format, DCTLUI_COMBO_BOX, 0, { FM_35, FM_16, FM_65 }, { Standard 35mm, Small 16mm, Large 65mm })
+DEFINE_UI_PARAMS(display, Display, DCTLUI_COMBO_BOX, 0, { DS_709, DS_SRGB, DS_DP3, DS_P3, DS_PQ, DS_HLG, DS_RCM }, { Rec.709 Gamma 2.4, sRGB Display 2.2, Display P3 2.2, P3-D65 Gamma 2.6, Rec.2100 PQ, Rec.2100 HLG, DWG DI for RCM })
+DEFINE_UI_PARAMS(peak_nits, HDR Peak Nits, DCTLUI_SLIDER_FLOAT, 1000.0, 400.0, 4000.0, 10.0)
+DEFINE_UI_PARAMS(grey_nits, Mid Grey Nits, DCTLUI_SLIDER_FLOAT, 10.0, 5.0, 25.0, 0.1)
+DEFINE_UI_PARAMS(surround, Surround, DCTLUI_COMBO_BOX, 0, { SR_DARK, SR_DIM, SR_BRIGHT }, { Dark, Dim, Bright })
+
+DEFINE_UI_TOOLTIP(Look, "Classic: clean daylight rendering. Night: fast tungsten response, more grain and halation. Fine: finest grain, deep blacks. Soft: lower contrast. Bold: denser, richer, harder. Silver: retained-silver process, high contrast, muted colour.")
+DEFINE_UI_TOOLTIP(Response, "Override the look's capture response: spectral sensitivity, tone curve, colour and grain of the capture stage.")
+DEFINE_UI_TOOLTIP(Print Base, "Override the look's print: Classic, or Deep for denser blacks and higher contrast.")
+DEFINE_UI_TOOLTIP(Process, "Override the look's process. Strong: pushed, richer, harder. Silver: retained silver.")
+DEFINE_UI_TOOLTIP(Exposure, "Exposure into the capture stage, in stops.")
+DEFINE_UI_TOOLTIP(Development, "Development push or pull in stops: contrast and density of the capture stage.")
+DEFINE_UI_TOOLTIP(Colour Separation, "Interlayer colour effect: more separation between hues, neutrals untouched. 0.3 = calibrated.")
+DEFINE_UI_TOOLTIP(Brightness, "Print brightness in printer points. +1 point = 0.025 log exposure.")
+DEFINE_UI_TOOLTIP(Red Balance, "Printer-point colour balance. Positive = more red, negative = more cyan.")
+DEFINE_UI_TOOLTIP(Green Balance, "Printer-point colour balance. Positive = more green, negative = more magenta.")
+DEFINE_UI_TOOLTIP(Blue Balance, "Printer-point colour balance. Positive = more blue, negative = more yellow.")
+DEFINE_UI_TOOLTIP(Contrast, "Print contrast around mid grey.")
+DEFINE_UI_TOOLTIP(Silver Retention, "Neutral silver left in the image: more contrast, muted colour. Brightness compensates to hold mid grey.")
+DEFINE_UI_TOOLTIP(Format, "Sets halation and grain size relative to the frame.")
+DEFINE_UI_TOOLTIP(Display, "Your display. DWG DI for RCM: set Resolve Color Management output tone mapping and gamut mapping to None.")
+DEFINE_UI_TOOLTIP(HDR Peak Nits, "Display peak luminance for Rec.2100 PQ and HLG. Ignored for SDR.")
+DEFINE_UI_TOOLTIP(Mid Grey Nits, "Mid grey on screen at 100 nit SDR. 10 = the reference look; raised automatically for HDR.")
+DEFINE_UI_TOOLTIP(Surround, "Viewing environment. Dark = the reference look (cinema). Dim and Bright lower contrast for brighter rooms.")
+
+// @@CONSTANTS@@
+
+typedef struct {
+  int neg, prt, look, gauge, frame;   // frame: TIMELINE_FRAME_INDEX, only readable in transform()
+  float exposure, push, inter, pts, pts_r, pts_g, pts_b, contrast, bleach, hal, hal_size, grain, grain_size;
+} FilmParams;
+
+/*----------- input decoding --------------------------------------------------------------*/
+__DEVICE__ float lh_tf(float x, int sp)
+{
+  if (sp == 0) return x <= 0.02740668f ? x/10.44426855f : _exp2f(x/0.07329248f - 7.0f) - 0.0075f;         // DaVinci Intermediate
+  if (sp == 1) return x <= 0.155251141552511f ? (x - 0.0729055341958355f)/10.5402377416545f : _exp2f(x*17.52f - 9.72f);  // ACEScct
+  if (sp == 2) return x > 0.149658f ? (_exp10f((x - 0.385537f)/0.247190f) - 0.052272f)/5.555556f : (x - 0.092809f)/5.367655f;  // ARRI LogC3 EI800
+  if (sp == 3) {                                                                                            // ARRI LogC4
+    return x >= 0.0f ? (_exp2f(14.0f*(x - LOGC4_C)/LOGC4_B + 6.0f) - 64.0f)/LOGC4_A : x*LOGC4_S + LOGC4_T;
+  }
+  if (sp == 4) return x >= 171.2102946929f/1023.0f ? _exp10f((x*1023.0f - 420.0f)/261.5f)*0.19f - 0.01f : (x*1023.0f - 95.0f)*0.01125f/(171.2102946929f - 95.0f);  // Sony S-Log3
+  if (sp == 5) return (x < 0.0f ? x/15.1927f : (_exp10f(x/0.224282f) - 1.0f)/155.975327f) - 0.01f;          // RED Log3G10
+  if (sp == 6) return x < 0.181f ? (x - 0.125f)/5.6f : _exp10f((x - 0.598206f)/0.241514f) - 0.00873f;     // Panasonic V-Log
+  return x;                                                                                                  // linear
+}
+
+__DEVICE__ float3 lh_m3(__CONSTANTREF__ float* M, int base, float3 v)
+{
+  return make_float3(M[base + 0]*v.x + M[base + 1]*v.y + M[base + 2]*v.z,
+                     M[base + 3]*v.x + M[base + 4]*v.y + M[base + 5]*v.z,
+                     M[base + 6]*v.x + M[base + 7]*v.y + M[base + 8]*v.z);
+}
+
+__DEVICE__ float3 lh_decode(float3 c, int sp)
+{
+  // camera log -> scene linear DaVinci Wide Gamut (the space the capture stage was fitted in)
+  float3 lin = make_float3(lh_tf(c.x, sp), lh_tf(c.y, sp), lh_tf(c.z, sp));
+  return lh_m3(IN_TO_DWG, sp*9, lin);
+}
+
+/*----------- film engine -----------------------------------------------------------------*/
+__DEVICE__ float fc_curve(__CONSTANTREF__ float* tab, int base, float x)
+{
+  float f = (x - CURVE_LO)*((float)(NC - 1)/(CURVE_HI - CURVE_LO));
+  f = _clampf(f, 0.0f, (float)(NC - 1) - 0.0001f);
+  int i = (int)f;
+  float t = f - (float)i;
+  float p1 = tab[base + i], p2 = tab[base + i + 1];
+  float p0 = i > 0 ? tab[base + i - 1] : 2.0f*p1 - p2;
+  float p3 = i + 2 < NC ? tab[base + i + 2] : 2.0f*p2 - p1;
+  return p1 + 0.5f*t*(p2 - p0 + t*(2.0f*p0 - 5.0f*p1 + 4.0f*p2 - p3 + t*(3.0f*(p1 - p2) + p3 - p0)));
+}
+
+__DEVICE__ float3 fc_camera(float3 rgb, int s)
+{
+  float r = _fmaxf(rgb.x, 0.0f), g = _fmaxf(rgb.y, 0.0f), b = _fmaxf(rgb.z, 0.0f);
+  float f[6] = { rgb.x, rgb.y, rgb.z, 2.0f*r*g/_fmaxf(r + g, 1e-12f), 2.0f*g*b/_fmaxf(g + b, 1e-12f), 2.0f*r*b/_fmaxf(r + b, 1e-12f) };
+  float e[3];
+  for (int c = 0; c < 3; c++) {
+    float acc = 0.0f;
+    for (int k = 0; k < 6; k++) acc += NEG_CAM[(s*3 + c)*6 + k]*f[k];
+    e[c] = acc;
+  }
+  float fl = EXPOSURE_FLOOR*(_fmaxf(e[0], 0.0f) + _fmaxf(e[1], 0.0f) + _fmaxf(e[2], 0.0f))/3.0f;
+  for (int c = 0; c < 3; c++) e[c] = 0.5f*(e[c] + _sqrtf(e[c]*e[c] + 4.0f*fl*fl));
+  return make_float3(e[0], e[1], e[2]);
+}
+
+__DEVICE__ float fc_hash(int x, int y, int z)
+{
+  unsigned int h = (unsigned int)x*73856093u ^ (unsigned int)y*19349663u ^ (unsigned int)z*83492791u;
+  h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15; h *= 0x27d4eb2du; h ^= h >> 16;
+  return (float)(h & 0x00ffffffu)/16777216.0f;
+}
+
+__DEVICE__ float fc_noise(float x, float y, int seed)
+{
+  float fx = _floorf(x), fy = _floorf(y);
+  int ix = (int)fx, iy = (int)fy;
+  float tx = x - fx, ty = y - fy;
+  tx = tx*tx*(3.0f - 2.0f*tx);
+  ty = ty*ty*(3.0f - 2.0f*ty);
+  float a = fc_hash(ix, iy, seed), b = fc_hash(ix + 1, iy, seed);
+  float c = fc_hash(ix, iy + 1, seed), d = fc_hash(ix + 1, iy + 1, seed);
+  return (a + (b - a)*tx + (c - a)*ty + (a - b - c + d)*tx*ty - 0.5f)*4.2f;
+}
+
+__DEVICE__ float3 fc_read(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, int x, int y, int w, int h, int sp)
+{
+  x = x < 0 ? 0 : (x > w - 1 ? w - 1 : x);
+  y = y < 0 ? 0 : (y > h - 1 ? h - 1 : y);
+  return lh_decode(make_float3(_tex2D(tr, x, y), _tex2D(tg, x, y), _tex2D(tb, x, y)), sp);
+}
+
+// The photochemical chain for one pixel: DWG scene linear in, projected print out as CIE XYZ
+// adapted to D65 with the clear print base at Y = 1.0.
+__DEVICE__ float3 fc_render(FilmParams fp, float3 dwg, int px, int py, int w, int h,
+                            __TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, int sp)
+{
+  const int s = fp.neg, p = fp.prt;
+
+  float push_e = fp.push, inter_e = fp.inter, contrast_e = fp.contrast, bleach_e = fp.bleach, pts_e = fp.pts;
+  if (fp.look == 1) { push_e += 0.5f; inter_e += 1.0f; contrast_e *= 1.18f; bleach_e += 0.15f; pts_e += 1.0f; }
+  if (fp.look == 2) { contrast_e *= 1.04f; bleach_e += 0.85f; }
+  bleach_e = _fminf(bleach_e, 1.5f);
+  pts_e -= BB_POINTS_COMP*bleach_e;
+
+  const float frame_mm = fp.gauge == 1 ? 12.52f : (fp.gauge == 2 ? 52.48f : 24.89f);
+  const float px_per_um = (float)w/(frame_mm*1000.0f);
+
+  // capture: scene light -> layer exposures, with halation
+  float3 E = fc_camera(dwg, s);
+  if (fp.hal > 0.0f) {
+    const float sigma_px = 65.0f*fp.hal_size*px_per_um;
+    const float rot = fc_hash(px, py, 7919)*6.2831853f;
+    const float rjit = fc_hash(px, py, 104729);
+    float acc = 0.0f;
+    for (int k = 0; k < HAL_TAPS; k++) {
+      float r = (HAL_R[k] + (rjit - 0.5f)*HAL_DR)*sigma_px;
+      float a = (float)k*2.39996323f + rot;
+      int sx = px + (int)_round(r*_cosf(a));
+      int sy = py + (int)_round(r*_sinf(a));
+      acc += fc_camera(fc_read(tr, tg, tb, sx, sy, w, h, sp), s).x;
+    }
+    float halo = acc/(float)HAL_TAPS;
+    float hr = NEG_HALATION[s]*fp.hal;
+    E.x = E.x*(1.0f - hr) + hr*halo;
+    E.y = E.y*(1.0f - 0.3f*hr) + 0.3f*hr*halo;
+  }
+
+  // develop the capture stage
+  const float exp_gain = _exp2f(fp.exposure);
+  const float gam = 1.0f + 0.12f*push_e;
+  const float speed = 0.10f*push_e;
+  float logE[3], L[3], D[3];
+  logE[0] = _log10f(_fmaxf(E.x*exp_gain, 1e-6f));
+  logE[1] = _log10f(_fmaxf(E.y*exp_gain, 1e-6f));
+  logE[2] = _log10f(_fmaxf(E.z*exp_gain, 1e-6f));
+  for (int c = 0; c < 3; c++) L[c] = fc_curve(NEG_CURVE, (s*3 + c)*NC, (logE[c] + speed)*gam)/NEG_GAMMA[s*3 + c];
+  const float dir = DIR_UNIT*inter_e;
+  for (int c = 0; c < 3; c++) {
+    float delta = 0.0f;
+    for (int k = 0; k < 3; k++) if (k != c) delta -= dir*0.5f*(L[k] - L[c]);
+    D[c] = fc_curve(NEG_CURVE, (s*3 + c)*NC, (logE[c] + delta + speed)*gam);
+  }
+
+  // grain
+  if (fp.grain > 0.0f) {
+    const float cell = _fmaxf(GRAIN_CELL_UM*fp.grain_size*px_per_um, 0.35f);
+    const float aperture = 48.0f/_fmaxf(1.0f/px_per_um, GRAIN_CELL_UM*fp.grain_size);
+    for (int c = 0; c < 3; c++) {
+      float sc = c == 2 ? 1.35f : 1.0f;
+      float fx = (float)px/(cell*sc), fy = (float)py/(cell*sc);
+      int seed = fp.frame*7 + c*1013 + 17;
+      float n = 0.75f*fc_noise(fx, fy, seed) + 0.45f*fc_noise(fx*2.3f + 11.1f, fy*2.3f + 5.3f, seed + 3);
+      float sigma = NEG_GRAIN[s]*fp.grain*(0.25f + 0.75f*_sqrtf(_fmaxf(D[c], 0.0f)/1.2f));
+      D[c] = _fmaxf(D[c] + sigma*n*aperture, 0.0f);
+    }
+  }
+
+  // printer
+  float H[3] = {0.0f, 0.0f, 0.0f};
+  float Hb[9];
+  for (int i = 0; i < 9; i++) Hb[i] = 0.0f;
+  for (int l = 0; l < NW; l++) {
+    float dens = NEG_BASE[s*NW + l] + D[0]*NEG_DYE[(s*3 + 0)*NW + l] + D[1]*NEG_DYE[(s*3 + 1)*NW + l] + D[2]*NEG_DYE[(s*3 + 2)*NW + l];
+    float T = _exp10f(-dens);
+    for (int i = 0; i < 9; i++) Hb[i] += T*PRT_W[(p*9 + i)*NW + l];
+  }
+  float pts[3] = { fp.pts_r + pts_e, fp.pts_g + pts_e, fp.pts_b + pts_e };
+  for (int b = 0; b < 3; b++) {
+    float g = _exp10f(PAIR_GAIN[(s*2 + p)*3 + b] + pts[b]*0.025f);
+    for (int k = 0; k < 3; k++) H[k] += g*Hb[b*3 + k];
+  }
+
+  // print
+  float P[3];
+  for (int k = 0; k < 3; k++) {
+    float x = _log10f(_fmaxf(H[k], 1e-12f));
+    float pv = PAIR_PIVOT[(s*2 + p)*3 + k];
+    P[k] = fc_curve(PRT_CURVE, (p*3 + k)*NC, pv + (x - pv)*contrast_e);
+  }
+  const float silver = bleach_e*BB_SILVER*(P[0] + P[1] + P[2])/3.0f;
+
+  // projection
+  float X = 0.0f, Y = 0.0f, Z = 0.0f;
+  for (int l = 0; l < NW; l++) {
+    float dens = PRT_BASE[p*NW + l] + silver + P[0]*PRT_DYE[(p*3 + 0)*NW + l] + P[1]*PRT_DYE[(p*3 + 1)*NW + l] + P[2]*PRT_DYE[(p*3 + 2)*NW + l];
+    float T = _exp10f(-dens);
+    X += T*PRT_PROJ[(p*3 + 0)*NW + l];
+    Y += T*PRT_PROJ[(p*3 + 1)*NW + l];
+    Z += T*PRT_PROJ[(p*3 + 2)*NW + l];
+  }
+  return make_float3(X, Y, Z);
+}
+
+/*----------- display transform -----------------------------------------------------------*/
+// Tonescale: y = (Lp/100) * (x/(x + s))^c, with s set so 18% grey lands on the mid-grey luminance.
+// The look is rendered for the reference (100 nit peak, 10 nit grey, dark surround). Its display
+// norm is mapped back through the reference curve and forward through the live one, so the
+// reference reproduces the look exactly and other displays extend it consistently.
+__DEVICE__ float lh_ts_s(float peak_rel, float grey_rel, float c)
+{
+  float k = _powf(grey_rel/peak_rel, 1.0f/c);
+  return 0.18f*(1.0f - k)/k;
+}
+
+__DEVICE__ float3 lh_gamut_fit(float3 rgb, float3 w)
+{
+  // desaturate toward the same luminance until no channel is negative (preserves hue and luminance)
+  float mn = _fminf(rgb.x, _fminf(rgb.y, rgb.z));
+  if (mn >= 0.0f) return rgb;
+  float Y = rgb.x*w.x + rgb.y*w.y + rgb.z*w.z;
+  float k = Y/_fmaxf(Y - mn, 1e-6f);
+  return make_float3(Y + (rgb.x - Y)*k, Y + (rgb.y - Y)*k, Y + (rgb.z - Y)*k);
+}
+
+__DEVICE__ float lh_pq(float nits)
+{
+  const float m1 = 0.1593017578125f, m2 = 78.84375f, c1 = 0.8359375f, c2 = 18.8515625f, c3 = 18.6875f;
+  float y = _powf(_fmaxf(nits, 0.0f)/10000.0f, m1);
+  return _powf((c1 + c2*y)/(1.0f + c3*y), m2);
+}
+
+__DEVICE__ float lh_hlg_oetf(float e)
+{
+  const float a = 0.17883277f, b = 0.28466892f, c = 0.55991073f;
+  return e <= 1.0f/12.0f ? _sqrtf(3.0f*e) : a*_logf(12.0f*e - b) + c;
+}
+
+__DEVICE__ float lh_di_encode(float y)
+{
+  return y <= 0.00262409f ? y*10.44426855f : (_log2f(_fmaxf(y + 0.0075f, 1e-10f)) + 7.0f)*0.07329248f;
+}
+
+/*----------- main ---------------------------------------------------------------------------*/
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+  // look presets: capture response, print base, process, plus small offsets
+  int neg = 1, prt = 0, proc = 0;
+  float dev_off = 0.0f, con_mul = 1.0f;
+  if (look == LK_CLASSIC) { neg = 1; prt = 0; proc = 0; }
+  else if (look == LK_NIGHT) { neg = 0; prt = 0; proc = 0; }
+  else if (look == LK_FINE) { neg = 3; prt = 1; proc = 0; }
+  else if (look == LK_SOFT) { neg = 2; prt = 0; proc = 0; dev_off = -0.5f; con_mul = 0.9f; }
+  else if (look == LK_BOLD) { neg = 0; prt = 0; proc = 1; }
+  else if (look == LK_SILVER) { neg = 1; prt = 0; proc = 2; }
+  if (response != RS_LOOK) neg = response - 1;
+  if (print_base != PB_LOOK) prt = print_base - 1;
+  if (process != PR_LOOK) proc = process - 1;
+
+  FilmParams fp;
+  fp.neg = neg; fp.prt = prt; fp.look = proc; fp.gauge = format; fp.frame = TIMELINE_FRAME_INDEX;
+  fp.exposure = exposure; fp.push = development + dev_off; fp.inter = separation;
+  fp.pts = -brightness; fp.pts_r = -bal_r; fp.pts_g = -bal_g; fp.pts_b = -bal_b;   // positive = brighter / more of that colour
+  fp.contrast = contrast*con_mul; fp.bleach = silver;
+  fp.hal = halation; fp.hal_size = halation_size; fp.grain = grain; fp.grain_size = grain_size;
+
+  float3 dwg = lh_decode(make_float3(_tex2D(p_TexR, p_X, p_Y), _tex2D(p_TexG, p_X, p_Y), _tex2D(p_TexB, p_X, p_Y)), in_space);
+  float3 xyz = fc_render(fp, dwg, p_X, p_Y, p_Width, p_Height, p_TexR, p_TexG, p_TexB, in_space);
+
+  // the look's display-linear result, as norm and ratios in Rec.2020
+  float3 rgb = lh_m3(XYZ_TO_2020, 0, xyz);
+  float n = _sqrtf(_fmaxf(rgb.x*rgb.x + rgb.y*rgb.y + rgb.z*rgb.z, 0.0f))/1.7320508f;
+  float3 ratio = n > 1e-10f ? make_float3(rgb.x/n, rgb.y/n, rgb.z/n) : make_float3(1.0f, 1.0f, 1.0f);
+
+  // retarget: reference tonescale inverse, live tonescale forward
+  const int hdr = display == DS_PQ || display == DS_HLG;
+  const float peak = hdr ? peak_nits : 100.0f;
+  const float grey = grey_nits*(hdr ? _powf(peak/100.0f, 0.18f) : 1.0f);
+  const float c_live = TS_CONTRAST*(surround == SR_DIM ? 0.95f : (surround == SR_BRIGHT ? 0.9f : 1.0f));
+  const float s_ref = lh_ts_s(1.0f, 0.1f, TS_CONTRAST);
+  const float s_live = lh_ts_s(peak/100.0f, grey/100.0f, c_live);
+  float q = _fminf(_powf(_fmaxf(n, 0.0f), 1.0f/TS_CONTRAST), 0.999999f);
+  float x = s_ref*q/(1.0f - q);
+  float n_out = peak/100.0f*_powf(x/(x + s_live), c_live);
+  rgb = make_float3(ratio.x*n_out, ratio.y*n_out, ratio.z*n_out);   // Rec.2020 linear, 1.0 = 100 nits
+
+  // display encoding
+  if (display == DS_RCM) {
+    float3 d = lh_m3(M2020_TO, 27, rgb);
+    return make_float3(lh_di_encode(d.x), lh_di_encode(d.y), lh_di_encode(d.z));
+  }
+  int g = (display == DS_709 || display == DS_SRGB) ? 0 : 1;          // 709 or P3 (HDR is P3-limited)
+  rgb = lh_m3(M2020_TO, g*9, rgb);
+  rgb = lh_gamut_fit(rgb, g == 0 ? make_float3(0.2126f, 0.7152f, 0.0722f) : make_float3(0.2290f, 0.6917f, 0.0793f));
+  float top = peak/100.0f;
+  rgb = make_float3(_clampf(rgb.x, 0.0f, top), _clampf(rgb.y, 0.0f, top), _clampf(rgb.z, 0.0f, top));
+
+  if (hdr) {
+    rgb = lh_m3(P3_TO_2020, 0, rgb);
+    if (display == DS_PQ) return make_float3(lh_pq(rgb.x*100.0f), lh_pq(rgb.y*100.0f), lh_pq(rgb.z*100.0f));
+    // HLG: inverse EOTF for a display of the chosen peak (BT.2100 extended system gamma)
+    float gm = 1.2f + 0.42f*_log10f(peak/1000.0f);
+    float3 e = make_float3(rgb.x/top, rgb.y/top, rgb.z/top);
+    float ys = _fmaxf(0.2627f*e.x + 0.6780f*e.y + 0.0593f*e.z, 1e-10f);
+    float sc = _powf(ys, (1.0f - gm)/gm);
+    return make_float3(lh_hlg_oetf(e.x*sc), lh_hlg_oetf(e.y*sc), lh_hlg_oetf(e.z*sc));
+  }
+  float inv = display == DS_P3 ? 1.0f/2.6f : (display == DS_709 ? 1.0f/2.4f : 1.0f/2.2f);
+  return make_float3(_powf(rgb.x, inv), _powf(rgb.y, inv), _powf(rgb.z, inv));
+}

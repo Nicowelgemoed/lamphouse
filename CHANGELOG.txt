@@ -1,0 +1,49 @@
+Lamphouse / Answer Print — changes to the spektrafilm film profiles
+==================================================================
+
+The spektrafilm licence asks that modifications to its profiles be described in a
+CHANGELOG.txt shipped with SPEKTRAFILM_LICENSE.txt. This file does that.
+
+Source profiles: spektrafilm by Andrea Volpato, https://github.com/andreavolpato/spektrafilm
+  commit 3bb2c2d2801ff68b92019cf1dbcbb133d60832bc (2026-06-07), src/spektrafilm/data/profiles/
+  Licence: CC BY-SA 4.0 (LICENSES/SPEKTRAFILM_LICENSE.txt, unchanged)
+Modified by: Nico Welgemoed
+
+Profiles used
+-------------
+  kodak_vision3_500t, kodak_vision3_250d, kodak_vision3_200t, kodak_vision3_50d,
+  kodak_2383, kodak_2393
+
+How the data was modified
+-------------------------
+1. Missing samples (NaN) in log spectral sensitivity, spectral dye density and base density were
+   filled by linear interpolation, holding the nearest valid value at the ends of the range.
+2. Spectral data was resampled from 380-780 nm at 5 nm to 380-740 nm at 10 nm (37 samples) for the
+   DCTL. Measured effect on the final image: at most 0.22 ΔE2000 against the 5 nm data.
+3. Characteristic (density) curves were resampled from 256 samples to 64 uniform samples over
+   log exposure -3 to +4, for Catmull-Rom interpolation in the DCTL (at most 0.004 density error).
+4. Derived quantities computed from the profiles and stored in the DCTLs, which are encodings of
+   the profile information and therefore also CC BY-SA 4.0:
+   - per negative: a second-order homogeneous polynomial mapping DaVinci Wide Gamut to layer
+     exposures, fitted by integrating the profile's spectral sensitivities against ~1,500 surface
+     spectra under the stock's rated illuminant (3200 K or D55);
+   - per negative: mid-scale gamma of each layer's curve (used by the interlayer model);
+   - per print: printer-band x print-layer exposure weights (3200 K tungsten lamp, Schott KG3 heat
+     filter, generic additive-printer dichroic bands at 492 / 588 nm);
+   - per print: projection-to-XYZ weights (Kinoton 75P xenon lamp, CIE 1931 2° observer,
+     normalised so clear print base = Y 1.0, Bradford-adapted to D65);
+   - per negative/print pair: printer gains that print an 18% grey neutral at visual density 1.0,
+     and the print log exposure of that grey (pivot for the print contrast control).
+5. Nothing in the profiles was re-measured or edited by hand.
+
+Other inputs not from spektrafilm
+---------------------------------
+  - Schott KG3 heat filter transmission: distributed with spektrafilm (data/filters), used as is.
+  - CIE colour matching functions, CIE D55/D65 and Kinoton 75P spectra: colour-science library.
+  - Grain amount per stock, halation strength, interlayer default and bleach-bypass silver density
+    are Lamphouse's own settings, not from spektrafilm or Kodak (see docs/how-it-works.md).
+
+Release history
+---------------
+1.0.0  (2026-11-06)  First release: Lamphouse.dctl (display rendering transform with six looks, camera log
+                     inputs, SDR and HDR outputs) and AnswerPrint.dctl (standalone film rendering).

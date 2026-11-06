@@ -1,0 +1,256 @@
+// Answer Print: spectral Kodak VISION3 negative -> print film emulation for DaVinci Resolve
+// @@URL@@
+// Input: DaVinci Wide Gamut / DaVinci Intermediate. Use via the ResolveFX DCTL plugin (needed for
+// halation and moving grain, which read neighbouring pixels and the timeline frame index).
+//
+// Derived from spektrafilm by Andrea Volpato, https://github.com/andreavolpato/spektrafilm
+// Licensed CC BY-SA 4.0, https://creativecommons.org/licenses/by-sa/4.0/
+// Modified by @@AUTHOR@@: film profiles resampled and baked into this DCTL with an original
+// rendering model (see CHANGELOG.txt in the Lamphouse repository).
+// This file is licensed CC BY-SA 4.0. Kodak, VISION3 and the stock numbers are trademarks of Kodak,
+// used only to identify the emulated products. Not affiliated with or endorsed by Kodak or Andrea Volpato.
+// Build: @@BUILD@@
+
+DEFINE_UI_PARAMS(neg_stock, Negative, DCTLUI_COMBO_BOX, 0, { N500T, N250D, N200T, N50D }, { VISION3 500T 5219, VISION3 250D 5207, VISION3 200T 5213, VISION3 50D 5203 })
+DEFINE_UI_PARAMS(print_stock, Print, DCTLUI_COMBO_BOX, 0, { P2383, P2393 }, { 2383 Print, 2393 Premier Print })
+DEFINE_UI_PARAMS(look, Look, DCTLUI_COMBO_BOX, 0, { LOOK_STD, LOOK_STRONG, LOOK_BLEACH }, { Standard lab print, Strong print, Bleach bypass print })
+DEFINE_UI_PARAMS(exposure, Exposure Stops, DCTLUI_SLIDER_FLOAT, 0.0, -4.0, 4.0, 0.05)
+DEFINE_UI_PARAMS(push, Neg Push Pull Stops, DCTLUI_SLIDER_FLOAT, 0.0, -1.0, 2.0, 0.25)
+DEFINE_UI_PARAMS(interlayer, Interlayer Colour, DCTLUI_SLIDER_FLOAT, 0.3, 0.0, 3.0, 0.05)
+DEFINE_UI_PARAMS(pts_master, Print Density Points, DCTLUI_SLIDER_FLOAT, 0.0, -12.0, 12.0, 0.5)
+DEFINE_UI_PARAMS(pts_r, Printer Light R, DCTLUI_SLIDER_FLOAT, 0.0, -12.0, 12.0, 0.5)
+DEFINE_UI_PARAMS(pts_g, Printer Light G, DCTLUI_SLIDER_FLOAT, 0.0, -12.0, 12.0, 0.5)
+DEFINE_UI_PARAMS(pts_b, Printer Light B, DCTLUI_SLIDER_FLOAT, 0.0, -12.0, 12.0, 0.5)
+DEFINE_UI_PARAMS(print_contrast, Print Contrast, DCTLUI_SLIDER_FLOAT, 1.0, 0.6, 1.6, 0.01)
+DEFINE_UI_PARAMS(bleach, Bleach Bypass, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.01)
+DEFINE_UI_PARAMS(halation, Halation, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 4.0, 0.05)
+DEFINE_UI_PARAMS(halation_size, Halation Size, DCTLUI_SLIDER_FLOAT, 1.0, 0.3, 3.0, 0.05)
+DEFINE_UI_PARAMS(grain, Grain, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 3.0, 0.05)
+DEFINE_UI_PARAMS(grain_size, Grain Size, DCTLUI_SLIDER_FLOAT, 1.0, 0.5, 2.5, 0.05)
+DEFINE_UI_PARAMS(gauge, Film Gauge, DCTLUI_COMBO_BOX, 0, { G35, G16, G65 }, { 35mm Super 35, 16mm Super 16, 65mm })
+DEFINE_UI_PARAMS(output, Output, DCTLUI_COMBO_BOX, 0, { OUT709, OUTSRGB, OUTP3, OUTDWG }, { Rec.709 Gamma 2.4, Rec.709 sRGB, P3-D65 Gamma 2.6, DWG DI for RCM })
+
+DEFINE_UI_TOOLTIP(Look, "Adds on top of the sliders. Strong: pushed negative, richer interlayer colour, higher print contrast and a touch of retained silver. Bleach bypass: heavy retained silver.")
+DEFINE_UI_TOOLTIP(Interlayer Colour, "DIR-coupler interimage effect between the negative's dye layers: raises saturation and separates hues while keeping neutrals neutral. 0.3 = calibrated default.")
+DEFINE_UI_TOOLTIP(Print Density Points, "Printer points on all three lights. +1 point = +0.025 log exposure = darker print.")
+DEFINE_UI_TOOLTIP(Printer Light R, "Additive printer red light. More red light = more cyan in the print (cooler).")
+DEFINE_UI_TOOLTIP(Printer Light G, "Additive printer green light. More green light = more magenta in the print.")
+DEFINE_UI_TOOLTIP(Printer Light B, "Additive printer blue light. More blue light = more yellow in the print (warmer).")
+DEFINE_UI_TOOLTIP(Bleach Bypass, "Skip-bleach print: retained silver adds neutral density in proportion to the image, raising contrast and muting colour. Print lights are compensated automatically to hold mid grey.")
+DEFINE_UI_TOOLTIP(Output, "Set this to your display. DWG-DI: display-referred values re-encoded for Resolve Color Management; set RCM output tone mapping and gamut mapping to None.")
+
+// @@CONSTANTS@@
+
+// ----------------------------------------------------------------------------------------------
+__DEVICE__ float di_decode(float x)
+{
+    return x <= 0.02740668f ? x / 10.44426855f : _exp2f(x / 0.07329248f - 7.0f) - 0.0075f;
+}
+
+__DEVICE__ float di_encode(float y)
+{
+    return y <= 0.00262409f ? y * 10.44426855f : (_log2f(_fmaxf(y + 0.0075f, 1e-10f)) + 7.0f) * 0.07329248f;
+}
+
+__DEVICE__ float3 read_lin(__TEXTURE__ tr, __TEXTURE__ tg, __TEXTURE__ tb, int x, int y, int w, int h)
+{
+    x = x < 0 ? 0 : (x > w - 1 ? w - 1 : x);
+    y = y < 0 ? 0 : (y > h - 1 ? h - 1 : y);
+    return make_float3(di_decode(_tex2D(tr, x, y)), di_decode(_tex2D(tg, x, y)), di_decode(_tex2D(tb, x, y)));
+}
+
+// table lookup: curve c of stock s, uniformly sampled over [CURVE_LO, CURVE_HI], Catmull-Rom cubic
+__DEVICE__ float curve_lookup(__CONSTANTREF__ float* tab, int base, float x)
+{
+    float f = (x - CURVE_LO) * ((float)(NC - 1) / (CURVE_HI - CURVE_LO));
+    f = _clampf(f, 0.0f, (float)(NC - 1) - 0.0001f);
+    int i = (int)f;
+    float t = f - (float)i;
+    float p1 = tab[base + i], p2 = tab[base + i + 1];
+    float p0 = i > 0 ? tab[base + i - 1] : 2.0f * p1 - p2;
+    float p3 = i + 2 < NC ? tab[base + i + 2] : 2.0f * p2 - p1;
+    return p1 + 0.5f * t * (p2 - p0 + t * (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3 + t * (3.0f * (p1 - p2) + p3 - p0)));
+}
+
+// scene -> negative layer exposures: second-order homogeneous polynomial (harmonic-mean terms) fitted to Kodak spectral sensitivities over
+// thousands of surface spectra (18% grey = 1, neutrals exact)
+__DEVICE__ float3 camera_exposure(float3 rgb, int s)
+{
+    float r = _fmaxf(rgb.x, 0.0f), g = _fmaxf(rgb.y, 0.0f), b = _fmaxf(rgb.z, 0.0f);
+    float f[6] = { rgb.x, rgb.y, rgb.z, 2.0f * r * g / _fmaxf(r + g, 1e-12f), 2.0f * g * b / _fmaxf(g + b, 1e-12f), 2.0f * r * b / _fmaxf(r + b, 1e-12f) };
+    float e[3];
+    for (int c = 0; c < 3; c++) {
+        float acc = 0.0f;
+        for (int k = 0; k < 6; k++) acc += NEG_CAM[(s * 3 + c) * 6 + k] * f[k];
+        e[c] = acc;
+    }
+    // smooth per-layer floor relative to the pixel's mean exposure (no negative exposure, no hard clamp)
+    float fl = EXPOSURE_FLOOR * (_fmaxf(e[0], 0.0f) + _fmaxf(e[1], 0.0f) + _fmaxf(e[2], 0.0f)) / 3.0f;
+    for (int c = 0; c < 3; c++) e[c] = 0.5f * (e[c] + _sqrtf(e[c] * e[c] + 4.0f * fl * fl));
+    return make_float3(e[0], e[1], e[2]);
+}
+
+// cheap integer hash -> uniform [0,1)
+__DEVICE__ float hash01(int x, int y, int z)
+{
+    unsigned int h = (unsigned int)x * 73856093u ^ (unsigned int)y * 19349663u ^ (unsigned int)z * 83492791u;
+    h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15; h *= 0x27d4eb2du; h ^= h >> 16;
+    return (float)(h & 0x00ffffffu) / 16777216.0f;
+}
+
+// value noise with smooth interpolation, roughly unit variance after scaling
+__DEVICE__ float value_noise(float x, float y, int seed)
+{
+    float fx = _floorf(x), fy = _floorf(y);
+    int ix = (int)fx, iy = (int)fy;
+    float tx = x - fx, ty = y - fy;
+    tx = tx * tx * (3.0f - 2.0f * tx);
+    ty = ty * ty * (3.0f - 2.0f * ty);
+    float a = hash01(ix, iy, seed), b = hash01(ix + 1, iy, seed);
+    float c = hash01(ix, iy + 1, seed), d = hash01(ix + 1, iy + 1, seed);
+    float v = a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
+    return (v - 0.5f) * 4.2f;
+}
+
+// ----------------------------------------------------------------------------------------------
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTURE__ p_TexR, __TEXTURE__ p_TexG, __TEXTURE__ p_TexB)
+{
+    const int s = neg_stock;
+    const int p = print_stock;
+
+    // look presets add on top of the sliders
+    float push_e = push, inter_e = interlayer, contrast_e = print_contrast, bleach_e = bleach, pts_e = pts_master;
+    if (look == LOOK_STRONG) { push_e += 0.5f; inter_e += 1.0f; contrast_e *= 1.18f; bleach_e += 0.15f; pts_e += 1.0f; }
+    if (look == LOOK_BLEACH) { contrast_e *= 1.04f; bleach_e += 0.85f; }
+    bleach_e = _fminf(bleach_e, 1.5f);
+    // a lab reprints a skip-bleach print lighter so mid grey returns to aim: ~3.2 points per unit
+    pts_e -= BB_POINTS_COMP * bleach_e;
+
+    const float frame_mm = gauge == G16 ? 12.52f : (gauge == G65 ? 52.48f : 24.89f);
+    const float px_per_um = (float)p_Width / (frame_mm * 1000.0f);
+    const float exp_gain = _exp2f(exposure);
+
+    // --- scene light -> negative layer exposures, with halation ---------------------------------
+    float3 rgb = read_lin(p_TexR, p_TexG, p_TexB, p_X, p_Y, p_Width, p_Height);
+    float3 E = camera_exposure(rgb, s);
+    if (halation > 0.0f) {
+        // light that reaches the base is mostly red; it reflects back into the red (and some green) layer.
+        // Kernel: sum of bounces, first sigma ~65um, golden-angle disc sampling.
+        const float sigma_px = 65.0f * halation_size * px_per_um;
+        float acc = 0.0f, wsum = 0.0f;
+        // per-pixel rotation of the sample spiral turns tap-pattern aliasing into fine, static noise
+        const float rot = hash01(p_X, p_Y, 7919) * 6.2831853f;
+        const float rjit = hash01(p_X, p_Y, 104729);
+        for (int k = 0; k < HAL_TAPS; k++) {
+            float r = (HAL_R[k] + (rjit - 0.5f) * HAL_DR) * sigma_px;
+            float a = (float)k * 2.39996323f + rot;
+            int sx = p_X + (int)_round(r * _cosf(a));
+            int sy = p_Y + (int)_round(r * _sinf(a));
+            float3 q = read_lin(p_TexR, p_TexG, p_TexB, sx, sy, p_Width, p_Height);
+            float3 eq = camera_exposure(q, s);
+            acc += HAL_W[k] * eq.x;
+            wsum += HAL_W[k];
+        }
+        float halo = acc / wsum;
+        float hr = NEG_HALATION[s] * halation;
+        E.x = E.x * (1.0f - hr) + hr * halo;
+        E.y = E.y * (1.0f - 0.3f * hr) + 0.3f * hr * halo;
+    }
+
+    // --- develop negative ---------------------------------------------------------------------
+    const float gam = 1.0f + 0.12f * push_e;
+    const float speed = 0.10f * push_e;
+    float logE[3], D0[3], L[3], D[3];
+    logE[0] = _log10f(_fmaxf(E.x * exp_gain, 1e-6f));
+    logE[1] = _log10f(_fmaxf(E.y * exp_gain, 1e-6f));
+    logE[2] = _log10f(_fmaxf(E.z * exp_gain, 1e-6f));
+    for (int c = 0; c < 3; c++) {
+        D0[c] = curve_lookup(NEG_CURVE, (s * 3 + c) * NC, (logE[c] + speed) * gam);
+        L[c] = D0[c] / NEG_GAMMA[s * 3 + c];
+    }
+    const float dir = DIR_UNIT * inter_e;
+    for (int c = 0; c < 3; c++) {
+        float delta = 0.0f;
+        for (int k = 0; k < 3; k++) if (k != c) delta -= dir * 0.5f * (L[k] - L[c]);
+        D[c] = curve_lookup(NEG_CURVE, (s * 3 + c) * NC, (logE[c] + delta + speed) * gam);
+    }
+
+    // --- grain: per-layer dye-cloud noise in density, moving with the timeline frame ---------------
+    if (grain > 0.0f) {
+        const float cell = _fmaxf(GRAIN_CELL_UM * grain_size * px_per_um, 0.35f);
+        const int frame = TIMELINE_FRAME_INDEX;
+        // Selwyn's law: RMS granularity ~ 1/aperture. NEG_GRAIN is sigma(D) at a 48um aperture; a pixel
+        // samples max(pixel, grain cluster) of film, so per-pixel grain stays consistent across resolution
+        const float pixel_um = 1.0f / px_per_um;
+        const float aperture = 48.0f / _fmaxf(pixel_um, GRAIN_CELL_UM * grain_size);
+        for (int c = 0; c < 3; c++) {
+            float sc = c == 2 ? 1.35f : 1.0f;     // blue-sensitive layer has the coarsest grain
+            float fx = (float)p_X / (cell * sc), fy = (float)p_Y / (cell * sc);
+            int seed = frame * 7 + c * 1013 + 17;
+            float n = 0.75f * value_noise(fx, fy, seed) + 0.45f * value_noise(fx * 2.3f + 11.1f, fy * 2.3f + 5.3f, seed + 3);
+            // density-dependent granularity: rises from the toe, flattens through the shoulder
+            float sigma = NEG_GRAIN[s] * grain * (0.25f + 0.75f * _sqrtf(_fmaxf(D[c], 0.0f) / 1.2f));
+            D[c] = _fmaxf(D[c] + sigma * n * aperture, 0.0f);
+        }
+    }
+
+    // --- print through an additive printer --------------------------------------------------------
+    float H[3] = {0.0f, 0.0f, 0.0f};
+    float Hb[9];
+    for (int i = 0; i < 9; i++) Hb[i] = 0.0f;
+    for (int l = 0; l < NW; l++) {
+        float dens = NEG_BASE[s * NW + l] + D[0] * NEG_DYE[(s * 3 + 0) * NW + l] + D[1] * NEG_DYE[(s * 3 + 1) * NW + l] + D[2] * NEG_DYE[(s * 3 + 2) * NW + l];
+        float T = _exp10f(-dens);
+        for (int i = 0; i < 9; i++) Hb[i] += T * PRT_W[(p * 9 + i) * NW + l];
+    }
+    float pts[3] = { pts_r + pts_e, pts_g + pts_e, pts_b + pts_e };
+    for (int b = 0; b < 3; b++) {
+        float g = _exp10f(PAIR_GAIN[(s * 2 + p) * 3 + b] + pts[b] * 0.025f);
+        for (int k = 0; k < 3; k++) H[k] += g * Hb[b * 3 + k];
+    }
+
+    // --- develop print --------------------------------------------------------------------------
+    float P[3];
+    for (int k = 0; k < 3; k++) {
+        float x = _log10f(_fmaxf(H[k], 1e-12f));
+        float pv = PAIR_PIVOT[(s * 2 + p) * 3 + k];
+        x = pv + (x - pv) * contrast_e;
+        P[k] = curve_lookup(PRT_CURVE, (p * 3 + k) * NC, x);
+    }
+    const float silver = bleach_e * BB_SILVER * (P[0] + P[1] + P[2]) / 3.0f;
+
+    // --- project and view -------------------------------------------------------------------------
+    float X = 0.0f, Y = 0.0f, Z = 0.0f;
+    for (int l = 0; l < NW; l++) {
+        float dens = PRT_BASE[p * NW + l] + silver + P[0] * PRT_DYE[(p * 3 + 0) * NW + l] + P[1] * PRT_DYE[(p * 3 + 1) * NW + l] + P[2] * PRT_DYE[(p * 3 + 2) * NW + l];
+        float T = _exp10f(-dens);
+        X += T * PRT_PROJ[(p * 3 + 0) * NW + l];
+        Y += T * PRT_PROJ[(p * 3 + 1) * NW + l];
+        Z += T * PRT_PROJ[(p * 3 + 2) * NW + l];
+    }
+
+    // --- display encode -------------------------------------------------------------------------
+    int m = output == OUTP3 ? 9 : (output == OUTDWG ? 18 : 0);
+    float r = XYZ2OUT[m + 0] * X + XYZ2OUT[m + 1] * Y + XYZ2OUT[m + 2] * Z;
+    float g = XYZ2OUT[m + 3] * X + XYZ2OUT[m + 4] * Y + XYZ2OUT[m + 5] * Z;
+    float b = XYZ2OUT[m + 6] * X + XYZ2OUT[m + 7] * Y + XYZ2OUT[m + 8] * Z;
+    if (output == OUTDWG) {
+        return make_float3(di_encode(r), di_encode(g), di_encode(b));
+    }
+    // out-of-gamut print colours: desaturate toward the same luminance instead of clipping hue
+    float mn = _fminf(r, _fminf(g, b));
+    if (mn < 0.0f) {
+        float k = Y / _fmaxf(Y - mn, 1e-6f);
+        r = Y + (r - Y) * k; g = Y + (g - Y) * k; b = Y + (b - Y) * k;
+    }
+    r = _saturatef(r); g = _saturatef(g); b = _saturatef(b);
+    if (output == OUTSRGB) {
+        r = r <= 0.0031308f ? r * 12.92f : 1.055f * _powf(r, 1.0f / 2.4f) - 0.055f;
+        g = g <= 0.0031308f ? g * 12.92f : 1.055f * _powf(g, 1.0f / 2.4f) - 0.055f;
+        b = b <= 0.0031308f ? b * 12.92f : 1.055f * _powf(b, 1.0f / 2.4f) - 0.055f;
+    } else {
+        float inv = output == OUTP3 ? 1.0f / 2.6f : 1.0f / 2.4f;
+        r = _powf(r, inv); g = _powf(g, inv); b = _powf(b, inv);
+    }
+    return make_float3(r, g, b);
+}

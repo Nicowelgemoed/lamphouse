@@ -1,0 +1,5 @@
+build/third_party/
+build/tests/scene_dwg.npy
+__pycache__/
+*.pyc
+.DS_Store
