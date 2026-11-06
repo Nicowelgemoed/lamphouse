@@ -9,7 +9,7 @@
 // rendering model (see CHANGELOG.txt in the Lamphouse repository).
 // This file is licensed CC BY-SA 4.0. Kodak, VISION3 and the stock numbers are trademarks of Kodak,
 // used only to identify the emulated products. Not affiliated with or endorsed by Kodak or Andrea Volpato.
-// Build: v1.0.0, 2026-11-06, 10 nm x 37 samples
+// Build: v1.1.0, 2026-11-06, 10 nm x 37 samples
 
 DEFINE_UI_PARAMS(neg_stock, Negative, DCTLUI_COMBO_BOX, 0, { N500T, N250D, N200T, N50D }, { VISION3 500T 5219, VISION3 250D 5207, VISION3 200T 5213, VISION3 50D 5203 })
 DEFINE_UI_PARAMS(print_stock, Print, DCTLUI_COMBO_BOX, 0, { P2383, P2393 }, { 2383 Print, 2393 Premier Print })

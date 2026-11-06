@@ -108,6 +108,17 @@ def lamphouse_constants():
     rec2020 = colour.RGB_COLOURSPACES['ITU-R BT.2020']
     from2020 = [colour.matrix_RGB_to_RGB(rec2020, colour.RGB_COLOURSPACES[n]) for n in ('ITU-R BT.709', 'P3-D65', 'ITU-R BT.2020', 'DaVinci Wide Gamut')]
     p3_to_2020 = colour.matrix_RGB_to_RGB(colour.RGB_COLOURSPACES['P3-D65'], rec2020)
+    # creative white: Rec.2020-domain Bradford adaptation D65 -> white, plus per-gamut (709, P3) scale so white peaks at 1
+    obs = colour.CCS_ILLUMINANTS['CIE 1931 2 Degree Standard Observer']
+    xyz_to_2020, to_xyz = rec2020.matrix_XYZ_to_RGB, rec2020.matrix_RGB_to_XYZ
+    cw_m, cw_k = [], []
+    for w in ('D65', 'D60', 'D55', 'D50'):
+        cat = colour.adaptation.matrix_chromatic_adaptation_VonKries(
+            colour.xy_to_XYZ(obs['D65']), colour.xy_to_XYZ(obs[w]), transform='Bradford')
+        M = xyz_to_2020 @ cat @ to_xyz
+        cw_m.append(M)
+        white = M @ np.ones(3)
+        cw_k.extend([1.0 / (from2020[g] @ white).max() for g in (0, 1)])
     a = (2.0 ** 18 - 16.0) / 117.45
     b = (1023.0 - 95.0) / 1023.0
     c = 95.0 / 1023.0
@@ -120,6 +131,8 @@ def lamphouse_constants():
         fmt('XYZ_TO_2020', rec2020.matrix_XYZ_to_RGB),
         fmt('M2020_TO', np.stack(from2020)),
         fmt('P3_TO_2020', p3_to_2020),
+        fmt('CW_M', np.stack(cw_m)),
+        fmt('CW_K', np.array(cw_k)),
     ])
 
 

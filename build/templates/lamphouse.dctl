@@ -35,6 +35,7 @@ DEFINE_UI_PARAMS(display, Display, DCTLUI_COMBO_BOX, 0, { DS_709, DS_SRGB, DS_DP
 DEFINE_UI_PARAMS(peak_nits, HDR Peak Nits, DCTLUI_SLIDER_FLOAT, 1000.0, 400.0, 4000.0, 10.0)
 DEFINE_UI_PARAMS(grey_nits, Mid Grey Nits, DCTLUI_SLIDER_FLOAT, 10.0, 5.0, 25.0, 0.1)
 DEFINE_UI_PARAMS(surround, Surround, DCTLUI_COMBO_BOX, 0, { SR_DARK, SR_DIM, SR_BRIGHT }, { Dark, Dim, Bright })
+DEFINE_UI_PARAMS(creative_white, Creative White, DCTLUI_COMBO_BOX, 0, { CW_D65, CW_D60, CW_D55, CW_D50 }, { D65, D60, D55, D50 })
 
 DEFINE_UI_TOOLTIP(Look, "Classic: clean daylight rendering. Night: fast tungsten response, more grain and halation. Fine: finest grain, deep blacks. Soft: lower contrast. Bold: denser, richer, harder. Silver: retained-silver process, high contrast, muted colour.")
 DEFINE_UI_TOOLTIP(Response, "Override the look's capture response: spectral sensitivity, tone curve, colour and grain of the capture stage.")
@@ -54,6 +55,7 @@ DEFINE_UI_TOOLTIP(Display, "Your display. DWG DI for RCM: set Resolve Color Mana
 DEFINE_UI_TOOLTIP(HDR Peak Nits, "Display peak luminance for Rec.2100 PQ and HLG. Ignored for SDR.")
 DEFINE_UI_TOOLTIP(Mid Grey Nits, "Mid grey on screen at 100 nit SDR. 10 = the reference look; raised automatically for HDR.")
 DEFINE_UI_TOOLTIP(Surround, "Viewing environment. Dark = the reference look (cinema). Dim and Bright lower contrast for brighter rooms.")
+DEFINE_UI_TOOLTIP(Creative White, "White point of the rendered image on a D65 display. D60, D55 and D50 render white and greys progressively warmer. The image is scaled so white never clips.")
 
 // @@CONSTANTS@@
 
@@ -329,12 +331,20 @@ __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTU
   float n_out = peak/100.0f*_powf(x/(x + s_live), c_live);
   rgb = make_float3(ratio.x*n_out, ratio.y*n_out, ratio.z*n_out);   // Rec.2020 linear, 1.0 = 100 nits
 
+  // creative white: Bradford-adapt the whole image from D65 to the chosen white, then scale so that
+  // white's largest channel in the target gamut stays at peak (no clipping, hue of white preserved)
+  int g = (display == DS_709 || display == DS_SRGB || display == DS_RCM) ? 0 : 1;   // 709 or P3 (HDR is P3-limited)
+  if (creative_white != CW_D65) {
+    rgb = lh_m3(CW_M, creative_white*9, rgb);
+    float k = CW_K[creative_white*2 + g];
+    rgb = make_float3(rgb.x*k, rgb.y*k, rgb.z*k);
+  }
+
   // display encoding
   if (display == DS_RCM) {
     float3 d = lh_m3(M2020_TO, 27, rgb);
     return make_float3(lh_di_encode(d.x), lh_di_encode(d.y), lh_di_encode(d.z));
   }
-  int g = (display == DS_709 || display == DS_SRGB) ? 0 : 1;          // 709 or P3 (HDR is P3-limited)
   rgb = lh_m3(M2020_TO, g*9, rgb);
   rgb = lh_gamut_fit(rgb, g == 0 ? make_float3(0.2126f, 0.7152f, 0.0722f) : make_float3(0.2290f, 0.6917f, 0.0793f));
   float top = peak/100.0f;

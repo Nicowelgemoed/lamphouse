@@ -45,5 +45,7 @@ Other inputs not from spektrafilm
 
 Release history
 ---------------
+1.1.0  (2026-11-06)  Lamphouse: Creative White control (D65, D60, D55, D50). D65 output unchanged.
+                     Answer Print unchanged.
 1.0.0  (2026-11-06)  First release: Lamphouse.dctl (display rendering transform with six looks, camera log
                      inputs, SDR and HDR outputs) and AnswerPrint.dctl (standalone film rendering).

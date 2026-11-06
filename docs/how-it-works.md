@@ -197,6 +197,13 @@ over to every display.
 - **DWG DI for RCM:** display-linear DaVinci Wide Gamut, re-encoded as DaVinci Intermediate, which Resolve Color
   Management reproduces exactly with tone and gamut mapping off.
 
+**Creative white.** After retargeting, the whole image can be re-rendered at a different white: a Bradford
+adaptation from D65 to D60, D55 or D50 (CIE daylight chromaticities), applied in Rec.2020. Neutrals then display
+at that white's chromaticity on a D65 display. The image is scaled so the adapted white's largest channel stays at
+peak in the target gamut (Rec.709 for SDR Rec.709/sRGB and RCM, P3 otherwise): white never clips and its hue is
+kept, at the cost of slightly lower overall brightness (×0.96 for D60 to ×0.85 for D50 on Rec.709).
+D65 is the identity and leaves the image untouched.
+
 ## 11. Looks and plain-language controls
 
 A Lamphouse look is a choice of capture response, print base and process plus small offsets:

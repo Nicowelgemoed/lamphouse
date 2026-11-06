@@ -35,6 +35,7 @@ The repo also contains **Answer Print**, the same film rendering as a simpler st
   and format.
 - **Grain:** per-layer, stronger in denser areas, new every frame, consistent from HD to 4K.
 - **16, 35 and 65 mm formats.**
+- **Creative white:** render the picture's white at D65, D60, D55 or D50.
 
 ## Downloads
 
@@ -102,6 +103,7 @@ HLG options directly in a non-managed project.
 | **HDR Peak Nits** | Peak luminance for PQ and HLG |
 | **Mid Grey Nits** | Mid-grey luminance at 100 nits. 10 = reference. Raised automatically for HDR |
 | **Surround** | Dark (reference, as in a cinema), Dim or Bright: lower contrast for brighter rooms, mid grey held |
+| **Creative White** | White point of the picture on a D65 display: D65 (reference), D60, D55 or D50 for progressively warmer whites and greys. White never clips |
 
 ## Answer Print
 
