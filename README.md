@@ -96,14 +96,16 @@ HLG options directly in a non-managed project.
 | **Red / Green / Blue Balance** | Colour balance in printer points. Positive = more of that colour |
 | **Contrast** | Print contrast around mid grey |
 | **Silver Retention** | Neutral silver left in the image: more contrast, less colour. Brightness compensates to hold mid grey |
-| **Halation / Halation Size** | Strength and spread of the glow around bright light |
-| **Grain / Grain Size** | Grain strength and size |
-| **Format** | 16, 35 or 65 mm: sets halation and grain size relative to the frame |
 | **Display** | Rec.709 2.4, sRGB 2.2, Display P3 2.2, P3-D65 2.6, Rec.2100 PQ, Rec.2100 HLG, DWG DI for RCM |
 | **HDR Peak Nits** | Peak luminance for PQ and HLG |
 | **Mid Grey Nits** | Mid-grey luminance at 100 nits. 10 = reference. Raised automatically for HDR |
 | **Surround** | Dark (reference, as in a cinema), Dim or Bright: lower contrast for brighter rooms, mid grey held |
 | **Creative White** | White point of the picture on a D65 display: D65 (reference), D60, D55 or D50 for progressively warmer whites and greys. White never clips |
+| *Texture* | |
+| **Texture** | Master switch for halation and grain |
+| **Halation** + **Amount / Size** | Switch, strength and spread of the glow around bright light. Off also speeds up playback |
+| **Grain** + **Amount / Size** | Switch, strength and size of the grain |
+| **Format** | 16, 35 or 65 mm: sets halation and grain size relative to the frame |
 
 ## Answer Print
 
@@ -114,8 +116,8 @@ Answer Print is the film rendering without the display-transform layer, with fil
 - Negative: VISION3 500T 5219, 250D 5207, 200T 5213 or 50D 5203.
 - Print: 2383 or 2393.
 - Print look: standard, strong, or bleach bypass.
-- Exposure, push/pull, interlayer, printer lights R/G/B in points, print contrast, bleach bypass, halation, grain
-  and gauge.
+- Exposure, push/pull, interlayer, printer lights R/G/B in points, print contrast and bleach bypass.
+- The same Texture section as Lamphouse: switches and sliders for halation and grain, plus gauge.
 
 It takes DaVinci WG / Intermediate and outputs Rec.709 2.4, sRGB, P3-D65 2.6, or DWG/DI for Resolve Color
 Management.
@@ -194,7 +196,7 @@ The full technical write-up, with equations, design decisions and test results:
 - **Generic printer:** a typical additive printer, not a specific lab's machine.
 - **Capture estimate:** most accurate on everyday surface colours, least on narrow-band lights such as LEDs and neon.
 - **HDR on Answer Print:** Answer Print is SDR only. Use Lamphouse for HDR.
-- **GPU load:** heavier than a LUT. Halation is the most expensive part; set it to 0 for faster playback.
+- **GPU load:** heavier than a LUT. Halation is the most expensive part; switch it off for faster playback.
 - **Plugin needed:** applied as a LUT instead of through the DCTL plugin, grain freezes and halation can't sample
   neighbouring pixels.
 

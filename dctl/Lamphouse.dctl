@@ -10,7 +10,7 @@
 // Modified by Nico Welgemoed: film profiles resampled and baked into this DCTL with an original
 // rendering model and display transform (see CHANGELOG.txt in the Lamphouse repository).
 // This file is licensed CC BY-SA 4.0. Not affiliated with or endorsed by Kodak or Andrea Volpato.
-// Build: Lamphouse v1.1.0, 2026-11-06, 10 nm x 37 samples
+// Build: Lamphouse v1.2.0, 2026-11-06, 10 nm x 37 samples
 
 DEFINE_UI_PARAMS(in_space, Input, DCTLUI_COMBO_BOX, 0, { IN_DWG, IN_ACESCCT, IN_LOGC3, IN_LOGC4, IN_SLOG3, IN_LOG3G10, IN_VLOG, IN_LINDWG }, { DaVinci WG Intermediate, ACEScct, ARRI LogC3 AWG3, ARRI LogC4 AWG4, Sony S-Log3 SGamut3.Cine, RED Log3G10 RWG, Panasonic V-Log V-Gamut, Linear DaVinci WG })
 DEFINE_UI_PARAMS(look, Look, DCTLUI_COMBO_BOX, 0, { LK_CLASSIC, LK_NIGHT, LK_FINE, LK_SOFT, LK_BOLD, LK_SILVER }, { Classic, Night, Fine, Soft, Bold, Silver })
@@ -26,17 +26,23 @@ DEFINE_UI_PARAMS(bal_g, Green Balance, DCTLUI_SLIDER_FLOAT, 0.0, -12.0, 12.0, 0.
 DEFINE_UI_PARAMS(bal_b, Blue Balance, DCTLUI_SLIDER_FLOAT, 0.0, -12.0, 12.0, 0.5)
 DEFINE_UI_PARAMS(contrast, Contrast, DCTLUI_SLIDER_FLOAT, 1.0, 0.6, 1.6, 0.01)
 DEFINE_UI_PARAMS(silver, Silver Retention, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.01)
-DEFINE_UI_PARAMS(halation, Halation, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 4.0, 0.05)
-DEFINE_UI_PARAMS(halation_size, Halation Size, DCTLUI_SLIDER_FLOAT, 1.0, 0.3, 3.0, 0.05)
-DEFINE_UI_PARAMS(grain, Grain, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 3.0, 0.05)
-DEFINE_UI_PARAMS(grain_size, Grain Size, DCTLUI_SLIDER_FLOAT, 1.0, 0.5, 2.5, 0.05)
-DEFINE_UI_PARAMS(format, Format, DCTLUI_COMBO_BOX, 0, { FM_35, FM_16, FM_65 }, { Standard 35mm, Small 16mm, Large 65mm })
 DEFINE_UI_PARAMS(display, Display, DCTLUI_COMBO_BOX, 0, { DS_709, DS_SRGB, DS_DP3, DS_P3, DS_PQ, DS_HLG, DS_RCM }, { Rec.709 Gamma 2.4, sRGB Display 2.2, Display P3 2.2, P3-D65 Gamma 2.6, Rec.2100 PQ, Rec.2100 HLG, DWG DI for RCM })
 DEFINE_UI_PARAMS(peak_nits, HDR Peak Nits, DCTLUI_SLIDER_FLOAT, 1000.0, 400.0, 4000.0, 10.0)
 DEFINE_UI_PARAMS(grey_nits, Mid Grey Nits, DCTLUI_SLIDER_FLOAT, 10.0, 5.0, 25.0, 0.1)
 DEFINE_UI_PARAMS(surround, Surround, DCTLUI_COMBO_BOX, 0, { SR_DARK, SR_DIM, SR_BRIGHT }, { Dark, Dim, Bright })
 DEFINE_UI_PARAMS(creative_white, Creative White, DCTLUI_COMBO_BOX, 0, { CW_D65, CW_D60, CW_D55, CW_D50 }, { D65, D60, D55, D50 })
+DEFINE_UI_PARAMS(texture_on, Texture, DCTLUI_CHECK_BOX, 1)
+DEFINE_UI_PARAMS(halation_on, Halation, DCTLUI_CHECK_BOX, 1)
+DEFINE_UI_PARAMS(halation, Halation Amount, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 4.0, 0.05)
+DEFINE_UI_PARAMS(halation_size, Halation Size, DCTLUI_SLIDER_FLOAT, 1.0, 0.3, 3.0, 0.05)
+DEFINE_UI_PARAMS(grain_on, Grain, DCTLUI_CHECK_BOX, 1)
+DEFINE_UI_PARAMS(grain, Grain Amount, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 3.0, 0.05)
+DEFINE_UI_PARAMS(grain_size, Grain Size, DCTLUI_SLIDER_FLOAT, 1.0, 0.5, 2.5, 0.05)
+DEFINE_UI_PARAMS(format, Format, DCTLUI_COMBO_BOX, 0, { FM_35, FM_16, FM_65 }, { Standard 35mm, Small 16mm, Large 65mm })
 
+DEFINE_UI_TOOLTIP(Texture, "Texture section: halation and grain. Untick to switch all texture off.")
+DEFINE_UI_TOOLTIP(Halation, "Red-orange glow around bright light, from light reflecting off the film base. Off also speeds up playback.")
+DEFINE_UI_TOOLTIP(Grain, "Per-layer grain that changes every frame.")
 DEFINE_UI_TOOLTIP(Look, "Classic: clean daylight rendering. Night: fast tungsten response, more grain and halation. Fine: finest grain, deep blacks. Soft: lower contrast. Bold: denser, richer, harder. Silver: retained-silver process, high contrast, muted colour.")
 DEFINE_UI_TOOLTIP(Response, "Override the look's capture response: spectral sensitivity, tone curve, colour and grain of the capture stage.")
 DEFINE_UI_TOOLTIP(Print Base, "Override the look's print: Classic, or Deep for denser blacks and higher contrast.")
@@ -598,7 +604,8 @@ __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTU
   fp.exposure = exposure; fp.push = development + dev_off; fp.inter = separation;
   fp.pts = -brightness; fp.pts_r = -bal_r; fp.pts_g = -bal_g; fp.pts_b = -bal_b;   // positive = brighter / more of that colour
   fp.contrast = contrast*con_mul; fp.bleach = silver;
-  fp.hal = halation; fp.hal_size = halation_size; fp.grain = grain; fp.grain_size = grain_size;
+  fp.hal = (texture_on && halation_on) ? halation : 0.0f; fp.hal_size = halation_size;   // 0 skips the effect entirely
+  fp.grain = (texture_on && grain_on) ? grain : 0.0f; fp.grain_size = grain_size;
 
   float3 dwg = lh_decode(make_float3(_tex2D(p_TexR, p_X, p_Y), _tex2D(p_TexG, p_X, p_Y), _tex2D(p_TexB, p_X, p_Y)), in_space);
   float3 xyz = fc_render(fp, dwg, p_X, p_Y, p_Width, p_Height, p_TexR, p_TexG, p_TexB, in_space);

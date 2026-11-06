@@ -23,13 +23,19 @@ DEFINE_UI_PARAMS(pts_g, Printer Light G, DCTLUI_SLIDER_FLOAT, 0.0, -12.0, 12.0, 
 DEFINE_UI_PARAMS(pts_b, Printer Light B, DCTLUI_SLIDER_FLOAT, 0.0, -12.0, 12.0, 0.5)
 DEFINE_UI_PARAMS(print_contrast, Print Contrast, DCTLUI_SLIDER_FLOAT, 1.0, 0.6, 1.6, 0.01)
 DEFINE_UI_PARAMS(bleach, Bleach Bypass, DCTLUI_SLIDER_FLOAT, 0.0, 0.0, 1.0, 0.01)
-DEFINE_UI_PARAMS(halation, Halation, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 4.0, 0.05)
+DEFINE_UI_PARAMS(output, Output, DCTLUI_COMBO_BOX, 0, { OUT709, OUTSRGB, OUTP3, OUTDWG }, { Rec.709 Gamma 2.4, Rec.709 sRGB, P3-D65 Gamma 2.6, DWG DI for RCM })
+DEFINE_UI_PARAMS(texture_on, Texture, DCTLUI_CHECK_BOX, 1)
+DEFINE_UI_PARAMS(halation_on, Halation, DCTLUI_CHECK_BOX, 1)
+DEFINE_UI_PARAMS(halation, Halation Amount, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 4.0, 0.05)
 DEFINE_UI_PARAMS(halation_size, Halation Size, DCTLUI_SLIDER_FLOAT, 1.0, 0.3, 3.0, 0.05)
-DEFINE_UI_PARAMS(grain, Grain, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 3.0, 0.05)
+DEFINE_UI_PARAMS(grain_on, Grain, DCTLUI_CHECK_BOX, 1)
+DEFINE_UI_PARAMS(grain, Grain Amount, DCTLUI_SLIDER_FLOAT, 1.0, 0.0, 3.0, 0.05)
 DEFINE_UI_PARAMS(grain_size, Grain Size, DCTLUI_SLIDER_FLOAT, 1.0, 0.5, 2.5, 0.05)
 DEFINE_UI_PARAMS(gauge, Film Gauge, DCTLUI_COMBO_BOX, 0, { G35, G16, G65 }, { 35mm Super 35, 16mm Super 16, 65mm })
-DEFINE_UI_PARAMS(output, Output, DCTLUI_COMBO_BOX, 0, { OUT709, OUTSRGB, OUTP3, OUTDWG }, { Rec.709 Gamma 2.4, Rec.709 sRGB, P3-D65 Gamma 2.6, DWG DI for RCM })
 
+DEFINE_UI_TOOLTIP(Texture, "Texture section: halation and grain. Untick to switch all texture off.")
+DEFINE_UI_TOOLTIP(Halation, "Red-orange glow around bright light, from light reflecting off the film base. Off also speeds up playback.")
+DEFINE_UI_TOOLTIP(Grain, "Per-layer grain that changes every frame.")
 DEFINE_UI_TOOLTIP(Look, "Adds on top of the sliders. Strong: pushed negative, richer interlayer colour, higher print contrast and a touch of retained silver. Bleach bypass: heavy retained silver.")
 DEFINE_UI_TOOLTIP(Interlayer Colour, "DIR-coupler interimage effect between the negative's dye layers: raises saturation and separates hues while keeping neutrals neutral. 0.3 = calibrated default.")
 DEFINE_UI_TOOLTIP(Print Density Points, "Printer points on all three lights. +1 point = +0.025 log exposure = darker print.")
@@ -126,6 +132,10 @@ __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTU
     // a lab reprints a skip-bleach print lighter so mid grey returns to aim: ~3.2 points per unit
     pts_e -= BB_POINTS_COMP * bleach_e;
 
+    // texture switches: an amount of 0 skips the effect entirely
+    const float hal_amt = (texture_on && halation_on) ? halation : 0.0f;
+    const float grain_amt = (texture_on && grain_on) ? grain : 0.0f;
+
     const float frame_mm = gauge == G16 ? 12.52f : (gauge == G65 ? 52.48f : 24.89f);
     const float px_per_um = (float)p_Width / (frame_mm * 1000.0f);
     const float exp_gain = _exp2f(exposure);
@@ -133,7 +143,7 @@ __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTU
     // --- scene light -> negative layer exposures, with halation ---------------------------------
     float3 rgb = read_lin(p_TexR, p_TexG, p_TexB, p_X, p_Y, p_Width, p_Height);
     float3 E = camera_exposure(rgb, s);
-    if (halation > 0.0f) {
+    if (hal_amt > 0.0f) {
         // light that reaches the base is mostly red; it reflects back into the red (and some green) layer.
         // Kernel: sum of bounces, first sigma ~65um, golden-angle disc sampling.
         const float sigma_px = 65.0f * halation_size * px_per_um;
@@ -152,7 +162,7 @@ __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTU
             wsum += HAL_W[k];
         }
         float halo = acc / wsum;
-        float hr = NEG_HALATION[s] * halation;
+        float hr = NEG_HALATION[s] * hal_amt;
         E.x = E.x * (1.0f - hr) + hr * halo;
         E.y = E.y * (1.0f - 0.3f * hr) + 0.3f * hr * halo;
     }
@@ -176,7 +186,7 @@ __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTU
     }
 
     // --- grain: per-layer dye-cloud noise in density, moving with the timeline frame ---------------
-    if (grain > 0.0f) {
+    if (grain_amt > 0.0f) {
         const float cell = _fmaxf(GRAIN_CELL_UM * grain_size * px_per_um, 0.35f);
         const int frame = TIMELINE_FRAME_INDEX;
         // Selwyn's law: RMS granularity ~ 1/aperture. NEG_GRAIN is sigma(D) at a 48um aperture; a pixel
@@ -189,7 +199,7 @@ __DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, __TEXTU
             int seed = frame * 7 + c * 1013 + 17;
             float n = 0.75f * value_noise(fx, fy, seed) + 0.45f * value_noise(fx * 2.3f + 11.1f, fy * 2.3f + 5.3f, seed + 3);
             // density-dependent granularity: rises from the toe, flattens through the shoulder
-            float sigma = NEG_GRAIN[s] * grain * (0.25f + 0.75f * _sqrtf(_fmaxf(D[c], 0.0f) / 1.2f));
+            float sigma = NEG_GRAIN[s] * grain_amt * (0.25f + 0.75f * _sqrtf(_fmaxf(D[c], 0.0f) / 1.2f));
             D[c] = _fmaxf(D[c] + sigma * n * aperture, 0.0f);
         }
     }
